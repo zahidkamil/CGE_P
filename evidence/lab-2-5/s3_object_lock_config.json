@@ -1,0 +1,1 @@
+aws s3api get-object-lock-configuration --bucket cgep-lab-grc-evidence-vault-1133afc2 --profile zahid_grc

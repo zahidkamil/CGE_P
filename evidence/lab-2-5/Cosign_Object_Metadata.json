@@ -1,0 +1,1 @@
+aws s3api get-object --bucket cgep-lab-grc-evidence-vault-1133afc2 --key runs/test-001/bundle.sig.bundle evidence/lab-2-5/bundle.sig.bundle
