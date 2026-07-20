@@ -1,0 +1,11 @@
+{
+[
+  "[SC-28] google_storage_bucket.bad_no_cmek: missing customer-managed encryption key. Remediation: add encryption { default_kms_key_name = ... }."
+  ]
+[
+  "[AC-3] google_compute_firewall.open_ssh: management port 22 open to 0.0.0.0/0. Remediation: narrow source_ranges or remove the rule.",
+  "[AC-3] google_storage_bucket.bad_public: bucket allows public access. Remediation: set uniform_bucket_level_access=true and public_access_prevention=\"enforced\"."
+]
+[
+  "[CM-6] google_storage_bucket.bad_no_labels: missing required labels [\"compliance_scope\", \"environment\", \"managed_by\", \"project\"]. Remediation: add the missing labels to the resource."
+]}
