@@ -3,3 +3,9 @@ List Profiles -> aws configure list-Profiles
 See properties of Profile -> aws configure list --profile your-profile-name
 terraform plan -> ask for variable input
 eval "$(aws configure export-credentials --profile <your-sandbox> --format env)" -> loading the AWS credentials into the session for Terraform
+
+GCP
+gcloud auth login
+list projects -> gcloud projects list
+project -> zahid-cloud-learning
+
