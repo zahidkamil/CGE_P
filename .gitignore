@@ -30,7 +30,9 @@ override.tf.json
 # !example_override.tf
 
 # Include tfplan files to ignore the plan output of command: terraform plan -out=tfplan
-# example: *tfplan*
+# example: 
+*tfplan*
+*.tfplan
 
 # Ignore CLI configuration files
 .terraformrc
@@ -42,3 +44,7 @@ terraform.rc
 # Optional: ignore plan files saved before destroying Terraform configuration
 # Uncomment the line below if you want to ignore planout files.
 # planout
+
+.DS_Store
+
+.terraform.lock.hcl
