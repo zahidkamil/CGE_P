@@ -39,26 +39,81 @@ resource "aws_s3_bucket" "primary" {
 }
 
 
+data "aws_caller_identity" "current" {}
+
+data "aws_iam_policy_document" "kms_key_policy" {
+  // This does not create an IAM policy but is used to construct a JSON policy doucment using HCL blocks instead of hand-writing JSON. The resulting JSON is then passed to the KMS key resource.
+  // Grants the root user of the account full access to the KMS key, and allows S3 to use the key for encryption/decryption.
+  statement {
+    sid = "AllowAdministration"
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+    actions   = ["kms:*"]
+    resources = ["*"]
+  }
+
+  statement {
+    // When S3 encrypts an object with a KMS key, it needs to call GenerateDataKey to get a data key for encrypting the object, and Decrypt to decrypt the data key when reading the object.
+    // The data key is stored alongside the object in S3, encrypted with the KMS key. S3 uses the KMS key to decrypt the data key when reading the object.
+    sid = "AllowS3Use"
+    principals {
+      type        = "Service"
+      identifiers = ["s3.amazonaws.com"]
+    }
+    actions = [
+      "kms:GenerateDataKey*",
+      "kms:Decrypt"
+    ]
+    resources = ["*"]
+    condition {
+      //Ensures this key can be used to encrypt/decrypt objects belinging to your account's S3 buckets. 
+      test     = "StringEquals"
+      variable = "kms:CallerAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+}
+
+resource "aws_kms_key" "bucket" {
+  description             = "KMS key for S3 bucket encryption"
+  deletion_window_in_days = 30
+  policy                  = data.aws_iam_policy_document.kms_key_policy.json
+
+  tags = {
+    Name = "${var.project_name}-s3-kms"
+  }
+}
+
+resource "aws_kms_alias" "bucket" {
+  name          = "alias/${var.project_name}-${var.environment}-s3"
+  target_key_id = aws_kms_key.bucket.key_id
+}
+
+
 # SC-28: Protection of information at rest.
 # AES-256 keeps this lab simple. The commented block below shows how you'd
 # switch to KMS-managed keys, covered in a later lab.
 resource "aws_s3_bucket_server_side_encryption_configuration" "primary" {
     bucket = aws_s3_bucket.primary.id
 
-    rule {
-        apply_server_side_encryption_by_default {
-            sse_algorithm = "AES256"
-        }
-    }
+    # rule {
+    #     apply_server_side_encryption_by_default {
+    #         sse_algorithm = "AES256"
+    #     }
+    # }
 
     # KMS teaser:
-    # rule {
-    #   apply_server_side_encryption_by_default {
-    #     sse_algorithm     = "aws:kms"
-    #     kms_master_key_id = aws_kms_key.bucket.arn
-    #   }
-    #   bucket_key_enabled = true
-    # }
+    rule {
+      apply_server_side_encryption_by_default {
+        sse_algorithm     = "aws:kms"
+        kms_master_key_id = aws_kms_key.bucket.arn
+      }
+      bucket_key_enabled = true
+      // Reduces the number of calls to KMS as S3 generates one time-limited "bucket key" per bucket by calling KMS once, and then uses that bucket key to encrypt/decrypt objects in the bucket. 
+      //The bucket key is rotated automatically by S3, and is only valid for a short time (15 minutes). This reduces the number of calls to KMS, which can be a bottleneck for high-throughput workloads.
+    }
 }
 
 # CM-6: Versioning preserves prior object states for recovery and audit.
