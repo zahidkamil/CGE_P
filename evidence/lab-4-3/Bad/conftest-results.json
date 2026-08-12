@@ -1,0 +1,26 @@
+[
+[
+	{
+		"filename": "terraform/primitives/compliant-s3/plan.json",
+		"namespace": "compliance.sc28_aws",
+		"successes": 1
+	}
+],[
+	{
+		"filename": "terraform/primitives/compliant-s3/plan.json",
+		"namespace": "compliance.ac3_aws",
+		"successes": 0,
+		"failures": [
+			{
+				"msg": "[AC-3] aws_s3_bucket.primary: missing or incomplete aws_s3_bucket_public_access_block. All four flags must be true."
+			}
+		]
+	}
+],[
+	{
+		"filename": "terraform/primitives/compliant-s3/plan.json",
+		"namespace": "compliance.cm6_aws",
+		"successes": 1
+	}
+]
+]
