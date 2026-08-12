@@ -43,6 +43,11 @@ jobs:
           curl -fsSL https://github.com/aquasecurity/tfsec/releases/download/v1.28.14/tfsec-linux-amd64 \
             -o /usr/local/bin/tfsec && chmod +x /usr/local/bin/tfsec
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.2.4'
+
       - name: Terraform plan
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
@@ -77,6 +82,9 @@ jobs:
           } > evidence/lab-4-3/conftest-results.json
           if [[ $EXIT -eq 0 ]]; then echo "conftest: PASS"; else echo "conftest: FAIL"; exit 1; fi
 
+      # if: always() — default Actions behavior skips later steps when an earlier
+      # step fails (e.g. conftest exit 1). always() still runs this step so a
+      # failed gate still produces evidence — the runs you most want a record of.
       - name: tfsec scan
         id: tfsec
         if: always()
@@ -86,21 +94,94 @@ jobs:
           tfsec "$TF_WORKING_DIR" --format sarif --out evidence/lab-4-3/tfsec.sarif || true
           tfsec "$TF_WORKING_DIR" --minimum-severity HIGH
 
-      # By default, Github Actions run only if every previous step in tje job succeeded. 
-      #This step runs even if the previous steps failed, so we can capture the plan for evidence.
+      # By default, Github Actions run only if every previous step in the job succeeded.
+      # This step runs even if the previous steps failed, so we can capture the plan for evidence.
       - name: Copy plan into evidence
-        if: always() 
+        if: always()
         run: |
           cp "$TF_WORKING_DIR"/plan.json evidence/lab-4-3/plan.json
           cp "$TF_WORKING_DIR"/plan.txt  evidence/lab-4-3/plan.txt
+
+      # Sign + upload even when conftest/tfsec failed (if: always()). Job failure
+      # is deferred to the final "Enforce gate" step so failed runs still leave
+      # a signed vault receipt. OIDC role needs vault-write (s3:PutObject on the
+      # vault bucket) in addition to ReadOnlyAccess from oidc-trust/main.tf.
+      - name: Bundle + sign + upload to vault
+        id: sign
+        if: always()
+        env:
+          # Repo Actions variable (gh variable set EVIDENCE_VAULT --body "$VAULT").
+          # Not a secret — just the evidence bucket name for aws s3 cp.
+          VAULT: ${{ vars.EVIDENCE_VAULT }}
+          RUN_ID: ${{ github.run_id }}
+          # Built-in context: commit SHA for this run. On pull_request it is the
+          # merge commit GitHub creates to test the PR; on workflow_dispatch/push
+          # it is the commit that was checked out.
+          SHA: ${{ github.sha }}
+        run: |
+          # -e exit on error; -u error on unset vars; -o pipefail fail if any
+          # stage in a pipeline fails (not only the last command).
+          set -euo pipefail
+          
+          # Prefer Linux sha256sum; fall back to macOS-style shasum -a 256.
+          # command -v: exit 0 if tool is on PATH. >/dev/null discards the path
+          # print; 2>&1 also discards stderr so "not found" stays quiet.
+
+          if command -v sha256sum >/dev/null 2>&1; then SHASUM="sha256sum"
+          elif command -v shasum >/dev/null 2>&1; then SHASUM="shasum -a 256"
+          # >&2 sends the error message to stderr (fd 2), not stdout.
+          else echo "Need sha256sum or shasum" >&2; exit 2; fi
+
+          BUNDLE="evidence-${RUN_ID}-${SHA}.tar.gz"
+          ( cd evidence/lab-4-3 && tar czf "../../${BUNDLE}" . )
+          # shasum/sha256sum print "<hash>  <filename>"; awk '{print $1}' keeps
+          # only the hex digest, then write it to the .sha256 sidecar file.
+          $SHASUM "${BUNDLE}" | awk '{print $1}' > "${BUNDLE}.sha256"
+
+          cosign sign-blob --yes --bundle "${BUNDLE}.sig.bundle" "${BUNDLE}"
+
+          KEY_PREFIX="runs/${RUN_ID}"
+          aws s3 cp "${BUNDLE}"            "s3://${VAULT}/${KEY_PREFIX}/${BUNDLE}"
+          aws s3 cp "${BUNDLE}.sha256"     "s3://${VAULT}/${KEY_PREFIX}/${BUNDLE}.sha256"
+          aws s3 cp "${BUNDLE}.sig.bundle" "s3://${VAULT}/${KEY_PREFIX}/${BUNDLE}.sig.bundle"
+
+          # Not computed locally — AWS assigns VersionId when the vault bucket
+          # has versioning. head-object returns that ID so the receipt pins the
+          # exact immutable object version (content hash is sha256 below).
+          VERSION_ID=$(aws s3api head-object --bucket "${VAULT}" --key "${KEY_PREFIX}/${BUNDLE}" --query VersionId --output text)
+          cat > receipt.json <<EOF
+          {
+            "run_id":"${RUN_ID}",
+            "vault":"${VAULT}",
+            "bundle_key":"${KEY_PREFIX}/${BUNDLE}",
+            "version_id":"${VERSION_ID}",
+            "sha256":"$(cat ${BUNDLE}.sha256)",
+            "commit":"${SHA}"
+          }
+          EOF
+          aws s3 cp receipt.json "s3://${VAULT}/${KEY_PREFIX}/receipt.json"
+          mkdir -p evidence/lab-4-4
+          cp receipt.json evidence/lab-4-4/receipt.json
 
       - name: Upload evidence artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: grc-evidence-${{ github.run_id }}
-          path: evidence/lab-4-3/
+          path: |
+            evidence/lab-4-3/
+            evidence/lab-4-4/
           retention-days: 90
+
+      # Verdict last: evidence already signed/uploaded above. steps.<id>.outcome
+      # is success|failure|cancelled|skipped (set by Actions before the shell runs).
+      # test A = B exits 0 if equal, 1 otherwise. && runs the right side only if
+      # the left succeeded — both gates must be success or this step (and job) fails.
+      - name: Enforce gate
+        if: always()
+        run: |
+          test "${{ steps.conftest.outcome }}" = "success" \
+            && test "${{ steps.tfsec.outcome }}" = "success"
 
   # pinned versions of the actions used in this workflow:
   # actions/checkout@v4
